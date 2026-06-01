@@ -1,0 +1,7 @@
+#ignore xd
+
+/apikey.txt
+cheating-detection-3/
+data/
+src/__pycache__/
+models/*.pth
