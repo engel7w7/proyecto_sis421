@@ -3,6 +3,8 @@
 ```powershell
 conda activate env_sis421
 cd "D:\proyecto_sis421_detector_trampas"
+luego escribir:
+D:
 streamlit run app.py
 ```
 --- 
