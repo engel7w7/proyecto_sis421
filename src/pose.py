@@ -2,7 +2,12 @@ import mediapipe as mp
 import numpy as np
 
 mp_pose = mp.solutions.pose
-pose_handler = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5)
+
+pose_handler = mp_pose.Pose(
+    static_image_mode=False, 
+    min_detection_confidence=0.5,
+    min_tracking_confidence=0.5
+)
 
 def get_pose_features(frame_rgb):
     results = pose_handler.process(frame_rgb)
