@@ -7,6 +7,7 @@ import torchvision
 from torchvision.models.detection.retinanet import retinanet_resnet50_fpn_v2, RetinaNetClassificationHead
 import torchvision.transforms.functional as F
 import mediapipe as mp
+import time
 
 from src.network import CheatingLSTM
 from src.pose import pose_handler, mp_pose
@@ -25,24 +26,31 @@ def load_production_models():
         with open("data/roboflow_data/data.yaml", "r") as f:
             config = yaml.safe_load(f)
         for idx, name in enumerate(config["names"]):
-            name_lower = name.lower()
+            name_lower = str(name).lower()
             if "phone" in name_lower or "celular" in name_lower: phone_id = idx
             if "paper" in name_lower or "papel" in name_lower: paper_id = idx
-    except: pass
+    except: 
+        pass
 
     retina_model = retinanet_resnet50_fpn_v2(weights=None)
     in_features = retina_model.head.classification_head.conv[0][0].in_channels
     num_anchors = retina_model.head.classification_head.num_anchors
+    
     retina_model.head.classification_head = RetinaNetClassificationHead(
-        in_channels=in_features, num_anchors=num_anchors, num_classes=3
+        in_channels=in_features, num_anchors=num_anchors, num_classes=2
     )
-    try: retina_model.load_state_dict(torch.load("models/retinanet.pth", map_location=device))
-    except: print("aviso: models/retinanet.pth no encontrado.")
+    
+    try: 
+        retina_model.load_state_dict(torch.load("models/retinanet.pth", map_location=device))
+    except: 
+        print("aviso: models/retinanet.pth no encontrado.")
     retina_model.to(device).eval()
 
     lstm_model = CheatingLSTM()
-    try: lstm_model.load_state_dict(torch.load("models/best_lstm.pth", map_location=device))
-    except: print("aviso: cargando pesos base para la lstm.")
+    try: 
+        lstm_model.load_state_dict(torch.load("models/best_lstm.pth", map_location=device))
+    except: 
+        print("aviso: cargando pesos base para la lstm.")
     lstm_model.to(device).eval()
     
     return retina_model, lstm_model, phone_id, paper_id
@@ -67,13 +75,18 @@ if run_pipeline:
     
     lista_temporal = []
     contador_cuadros = 0
-    cajas_cache, scores_cache, labels_cache = [], [], []
+    
+    cajas_cache = np.empty((0, 4))
+    scores_cache = np.array([])
+    labels_cache = np.array([])
+    
+    SALTAR_RETINA = 5 
     
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
         
-        frame = cv2.resize(frame, (640, 480))
+        frame = cv2.resize(frame, (640, 640))
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         plotted_rgb = frame_rgb.copy()
         
@@ -81,11 +94,7 @@ if run_pipeline:
         
         angle, dist, offset_x = 0.0, 0.5, 0.0
         if resultados_pose.pose_landmarks:
-            mp_dibujo.draw_landmarks(
-                plotted_rgb, 
-                resultados_pose.pose_landmarks, 
-                mp_pose.POSE_CONNECTIONS
-            )
+            mp_dibujo.draw_landmarks(plotted_rgb, resultados_pose.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             
             puntos = resultados_pose.pose_landmarks.landmark
             nose = np.array([puntos[mp_pose.PoseLandmark.NOSE].x, puntos[mp_pose.PoseLandmark.NOSE].y])
@@ -99,12 +108,13 @@ if run_pipeline:
             dist = np.linalg.norm(left_shoulder - right_shoulder)
             offset_x = neck_vector[0]
             
-        pose_out = np.array([angle, dist, offset_x])
+        pose_out = np.array([angle / 3.1416, dist, offset_x * 5.0])
         
-        if contador_cuadros % 3 == 0:
+        if contador_cuadros % SALTAR_RETINA == 0:
             img_tensor = F.to_tensor(frame_rgb).to(device)
             with torch.no_grad():
                 retina_out = retina_net([img_tensor])[0]
+            
             cajas_cache = retina_out['boxes'].cpu().numpy()
             scores_cache = retina_out['scores'].cpu().numpy()
             labels_cache = retina_out['labels'].cpu().numpy()
@@ -112,27 +122,31 @@ if run_pipeline:
         contador_cuadros += 1
         
         p_phone, p_paper = 0.0, 0.0
-        for box, score, label in zip(cajas_cache, scores_cache, labels_cache):
-            if score > 0.3: 
-                c_id = label - 1 
-                if c_id == phone_idx: p_phone = max(p_phone, score)
-                if c_id == paper_idx: p_paper = max(p_paper, score)
+        
+        for i in range(len(scores_cache)):
+            score_actual = scores_cache[i]
+            clase_real = labels_cache[i] - 1 
+            
+            if score_actual > 0.12:
+                if clase_real == phone_idx and score_actual > p_phone: 
+                    p_phone = score_actual
+                if clase_real == paper_idx and score_actual > p_paper: 
+                    p_paper = score_actual
                 
-                xmin, ymin, xmax, ymax = map(int, box)
-                color = (255, 0, 0) if c_id == phone_idx else (0, 255, 0)
-                cv2.rectangle(plotted_rgb, (xmin, ymin), (xmax, ymax), color, 2)
+                if score_actual > 0.30:
+                    xmin, ymin, xmax, ymax = map(int, cajas_cache[i])
+                    color = (255, 0, 0) if clase_real == phone_idx else (0, 255, 0)
+                    cv2.rectangle(plotted_rgb, (xmin, ymin), (xmax, ymax), color, 2)
         
         cv2.putText(plotted_rgb, f"celular: {p_phone:.2f}", (15, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(plotted_rgb, f"angulo: {angle:.2f}", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(plotted_rgb, f"hombros: {dist:.2f}", (15, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(plotted_rgb, f"angulo norm: {pose_out[0]:.2f}", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         
-        if contador_cuadros % 10 == 0:
-            vector_cuadro = np.concatenate(([p_phone, p_paper], pose_out))
-            lista_temporal.append(vector_cuadro)
-            if len(lista_temporal) > 30:
-                lista_temporal.pop(0)
+        vector_cuadro = np.concatenate(([p_phone, p_paper], pose_out))
+        lista_temporal.append(vector_cuadro)
+        if len(lista_temporal) > 15:
+            lista_temporal.pop(0)
             
-        if len(lista_temporal) == 30:
+        if len(lista_temporal) == 15:
             matriz_secuencia = np.array(lista_temporal)
             input_tensor = torch.tensor(matriz_secuencia, dtype=torch.float32).unsqueeze(0).to(device)
             with torch.no_grad():
@@ -140,14 +154,24 @@ if run_pipeline:
         else:
             score_lstm = 0.0
             
-        bar.progress(float(score_lstm))
+        score_final = score_lstm
+        if p_phone > 0.30:
+            score_final = max(score_final, p_phone + 0.35)
+        if p_paper > 0.30:
+            score_final = max(score_final, p_paper + 0.25)
+            
+        score_final = min(1.0, float(score_final))
+            
+        bar.progress(score_final)
         alto, ancho, _ = frame.shape
         
-        if score_lstm >= threshold:
-            status_text.error(f"alerta: sospecha de copia ({score_lstm*100:.1f}%)")
+        if score_final >= threshold:
+            status_text.error(f"alerta: sospecha de copia ({score_final*100:.1f}%)")
             cv2.rectangle(plotted_rgb, (0, 0), (ancho, alto), (255, 0, 0), 10)
         else:
-            status_text.success(f"estado: normal ({score_lstm*100:.1f}%)")
+            status_text.success(f"estado: normal ({score_final*100:.1f}%)")
             
         VIDEO_CONTAINER.image(plotted_rgb)
+        time.sleep(0.001) 
+        
     cap.release()
