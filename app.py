@@ -14,7 +14,7 @@ from src.pose import pose_handler, mp_pose
 
 mp_dibujo = mp.solutions.drawing_utils
 
-st.set_page_config(page_title="control de examenes - sis421", layout="wide")
+st.set_page_config(page_title="control de examenes", layout="wide")
 st.title("sistema de monitoreo de examenes en linea")
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
